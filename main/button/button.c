@@ -1,0 +1,94 @@
+#include <stdio.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+#include "driver/gpio.h"
+#include "esp_log.h"
+
+#define BUTTON1_PIN 2
+#define BUTTON2_PIN 3
+
+static QueueHandle_t gpio_evt_queue = NULL; // criacao da fila - inicialmente sem endereço
+static const char* TAG = "BUTTON_TEST";
+
+//isr handler
+static void IRAM_ATTR gpio_isr_handler(void* arg){
+    uint32_t gpio_num = (uint32_t) arg; // converte o numero do pino para numero
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL); // envia o gpio_num a fila
+}
+
+//button task
+void buttonTask(void*pvpameters){
+    uint32_t gpio_num;
+    uint8_t led1 = 0, led2 = 0;
+
+    TickType_t last_button_press = 0;
+
+    while(1){
+        xQueueReceive(gpio_evt_queue, &gpio_num, portMAX_DELAY); // aguarda o recebimento de dados da fila no endereço &gpio_num
+        ESP_LOGI(TAG,"GPIO[%li] intr \n",gpio_num);
+
+        TickType_t current_time = xTaskGetTickCount();
+
+        // diferenca entre o tempo em que o botao foi apertado
+        if(current_time - last_button_press >= pdMS_TO_TICKS(250)){
+            last_button_press = current_time;
+
+            switch (gpio_num) {
+                case BUTTON1_PIN:
+                    
+
+            }
+            if(gpio_num == BUTTON1_PIN){
+                gpio_set_level(LED1_PIN,led1^=1);
+            }
+            else if (gpio_num == BUTTON2_PIN){
+                gpio_set_level(LED2_PIN,led2^=1);
+            }
+        }
+    }
+}
+
+void app_main(void)
+{
+    gpio_config_t io_config = {};
+
+    io_config.pin_bit_mask = (1ULL<<LED1_PIN)|(1ULL<<LED2_PIN)|(1ULL<<LED3_PIN); // configura os pins ao mesmo tempo
+    io_config.mode = GPIO_MODE_OUTPUT; // todos output
+    io_config.pull_up_en = GPIO_PULLUP_DISABLE; // todos sem pullup
+    io_config.pull_down_en = GPIO_PULLDOWN_DISABLE; //todos sem pulldown
+    io_config.intr_type = GPIO_INTR_DISABLE; //todos sem interrupção
+    gpio_config(&io_config);
+
+    //inicializar desligado
+    gpio_set_level(LED1_PIN,0);
+    gpio_set_level(LED2_PIN,0);
+    gpio_set_level(LED3_PIN,0);
+
+    io_config.pin_bit_mask = (1ULL<<BUTTON1_PIN)|(1ULL<<BUTTON2_PIN);
+    io_config.mode = GPIO_MODE_INPUT;
+    io_config.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_config.intr_type = GPIO_INTR_NEGEDGE;
+    gpio_config(&io_config);
+
+    gpio_reset_pin(BUTTON1_PIN);
+    gpio_set_direction(BUTTON1_PIN,GPIO_MODE_INPUT);
+    gpio_pullup_en(BUTTON1_PIN);    //habilitar pull-up
+    gpio_set_intr_type(BUTTON1_PIN,GPIO_INTR_NEGEDGE);  /
+    gpio_reset_pin(BUTTON2_PIN);
+    gpio_set_direction(BUTTON2_PIN,GPIO_MODE_INPUT);
+    gpio_pullup_en(BUTTON2_PIN);    //habilitar pull-up
+    gpio_set_intr_type(BUTTON2_PIN,GPIO_INTR_NEGEDGE);  //tipo de interrpução - negativa
+
+
+    gpio_evt_queue = xQueueCreate(1,sizeof(uint32_t));
+    xTaskCreate(buttonTask,"ButtonTask",2048,NULL, 2, NULL);
+
+    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1);
+    gpio_isr_handler_add(BUTTON1_PIN,gpio_isr_handler,(void*) BUTTON1_PIN);
+    gpio_isr_handler_add(BUTTON2_PIN,gpio_isr_handler,(void*) BUTTON2_PIN);
+
+}

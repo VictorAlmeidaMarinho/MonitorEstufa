@@ -1,0 +1,31 @@
+A. Organização de código fonte
+    a. criar funções para ações do display: 
+        - mostrar mensagem genérica
+        - startar o monitor
+        - finalizar monitor
+    b. criar arquivo com as funções do display?
+        - adicionar esse arquivo aos componentes?
+
+B. SetPoints
+    typedef struct {
+        temp,
+        humid,
+        lumin,
+    } setPoint_t
+
+    1. Mostrar setpoints default (temp, humid, lumin)
+    2. "Deseja configurar?"
+        2.1: "Sim | Não"
+        2.2: "
+                Temp.  :
+                Humid. :
+                Lumin. :
+            "
+            a. escolher com os botões: lados, cima, baixo e segurar por 1s
+                - Indicação de escolha: "> "
+            b. alterar com botões:
+                - passo temp: 1; passo humid: 5, passo lumin: a verificar
+        
+        2.3
+    
+
