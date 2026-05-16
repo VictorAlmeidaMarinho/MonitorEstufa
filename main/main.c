@@ -25,6 +25,10 @@
 #define BT_CONFIRM 2
 #define BT_BACK 3
 
+// -- LED
+#define LED1_PIN 14
+#define LED2_PIN 13
+
 // Display positions
 typedef struct {
     int8_t center_line;
@@ -48,20 +52,51 @@ static const gpio_num_t dht_gpio = 15;
 
 // -- TAG's
 static const char *tag = "DHT11: ";
+static const char *TAG = "BUTTON: ";
 
 // -- Auxiliar global variable to write in oled
 char linechar[30] = {0};
 
-// -- Message start display
-void startDisplay(displayPosition_t position, SSD1306_t oled ) {
 
-    // -- Horizontal Scroll
-	ssd1306_clear_screen(&oled, false);
-	ssd1306_contrast(&oled, 0xff);
-	ssd1306_display_text(&oled, position.center_line, "Monitor: Estufa", 16, false);
-	ssd1306_hardware_scroll(&oled, SCROLL_RIGHT);
-	vTaskDelay(5000 / portTICK_PERIOD_MS);
-	ssd1306_hardware_scroll(&oled, SCROLL_STOP);
+// -- Queue create - NULL address
+static QueueHandle_t gpio_evt_queue = NULL;
+
+// -- ISR handler
+static void IRAM_ATTR gpio_isr_handler(void* arg){
+    uint32_t gpio_num = (uint32_t) arg; // converte o numero do pino para numero
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL); // envia o gpio_num a fila
+}
+
+// -- Button task for set points
+void taskSetPoints(void* pvparameters){
+    uint32_t gpio_num;
+    uint8_t led1 = 0, led2 = 0;
+
+    TickType_t last_button_press = 0;
+
+    while(1)
+    {
+        xQueueReceive(gpio_evt_queue, &gpio_num, portMAX_DELAY); 
+        ESP_LOGI(TAG,"GPIO[%li] intr \n",gpio_num);
+
+        TickType_t current_time = xTaskGetTickCount();
+
+        // diferenca entre o tempo em que o botao foi apertado
+        if(current_time - last_button_press >= pdMS_TO_TICKS(250))
+        {
+            last_button_press = current_time;
+
+            switch (gpio_num)
+            {
+                case BT_LEFT:
+                    gpio_set_level(LED1_PIN, led1^=1);
+                    break;
+                case BT_RIGHT:                   
+                    gpio_set_level(LED2_PIN, led2^=1);
+                    break;
+            }
+        }
+    }
 }
 
 void configureButtons(const gpio_num_t *pins, size_t count) {
@@ -74,9 +109,22 @@ void configureButtons(const gpio_num_t *pins, size_t count) {
     io_config.mode = GPIO_MODE_INPUT;
     io_config.pull_up_en = GPIO_PULLUP_ENABLE;
     io_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_config.intr_type = GPIO_INTR_NEGEDGE; //tipo de interrpução - negativa
+    io_config.intr_type = GPIO_INTR_NEGEDGE;
     
     gpio_config(&io_config);
+}
+
+
+// -- Message start display
+void startDisplay(displayPosition_t position, SSD1306_t oled ) {
+
+    // -- Horizontal Scroll
+	ssd1306_clear_screen(&oled, false);
+	ssd1306_contrast(&oled, 0xff);
+	ssd1306_display_text(&oled, position.center_line, "Monitor: Estufa", 16, false);
+	ssd1306_hardware_scroll(&oled, SCROLL_RIGHT);
+	vTaskDelay(5000 / portTICK_PERIOD_MS);
+	ssd1306_hardware_scroll(&oled, SCROLL_STOP);
 }
 
 // -- Set temperature, humidity, luminosity points
@@ -97,10 +145,7 @@ void setPoints(displayPosition_t position, SSD1306_t oled) {
     sprintf(linechar, "Humi: %d %%", set_point.humid);
     ssd1306_display_text(&oled, position.center_line + 2, linechar, sizeof(linechar),false);
     sprintf(linechar, "Lumin: %d cd", set_point.lumin);
-    ssd1306_display_text(&oled, position.center_line + 3, linechar, sizeof(linechar),false);
-
-    // configure setpoints
-
+    ssd1306_display_text(&oled, position.center_line + 3, linechar, sizeof(linechar),false);    
 }
 
 
@@ -123,10 +168,8 @@ void app_main(void)
     #endif 
 
     // -- Configure control buttons
-    const gpio_num_t buttons[] = {
-    BT_RIGHT, BT_LEFT, BT_UP, BT_DOWN, BT_CONFIRM, BT_BACK
-    };
-    configure_buttons(buttons, sizeof(buttons) / sizeof(buttons[0]));
+    const gpio_num_t buttons[] = {BT_RIGHT, BT_LEFT, BT_UP, BT_DOWN, BT_CONFIRM, BT_BACK};
+    configureButtons(buttons, sizeof(buttons) / sizeof(buttons[0]));
 
     // -- Initialize the I2C master driver
     SSD1306_t oled;
@@ -148,6 +191,14 @@ void app_main(void)
 
     // -- SetPoints
 	setPoints(posit, oled);
+
+    // -- Queue and Tasks
+    gpio_evt_queue = xQueueCreate(1,sizeof(uint32_t));
+    xTaskCreate(taskSetPoints,"taskSetPoints",2048,NULL, 2, NULL);
+
+    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1);
+    gpio_isr_handler_add(BT_LEFT,gpio_isr_handler,(void*) BT_LEFT);
+    gpio_isr_handler_add(BT_RIGHT,gpio_isr_handler,(void*) BT_RIGHT);
 
     // -- Footer
     ssd1306_display_text(&oled, posit.down, "   (Monitor)   ", 16, false);
