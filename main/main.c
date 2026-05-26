@@ -25,6 +25,8 @@
 #define BT_CONFIRM 2
 #define BT_BACK 3
 
+const gpio_num_t buttons[] = {BT_RIGHT, BT_LEFT, BT_UP, BT_DOWN, BT_CONFIRM, BT_BACK};
+
 // -- LED
 #define LED1_PIN 14
 #define LED2_PIN 13
@@ -46,6 +48,12 @@ typedef struct {
     uint8_t lumin;
 } setPoint_t;
 
+setPoint_t set_point = {
+    .temp = 27,
+    .humid = 80,
+    .lumin = 80,
+};
+
 // -- DHT11 configure
 static const dht_sensor_type_t sensor_type = DHT_TYPE_DHT11;
 static const gpio_num_t dht_gpio = 15;
@@ -57,6 +65,11 @@ static const char *TAG = "BUTTON: ";
 // -- Auxiliar global variable to write in oled
 char linechar[30] = {0};
 
+// -- Auxiliar global variable to code in oled
+SSD1306_t oled;
+
+//  -- Auxiliar global variable to set points
+bool decide_sets;
 
 // -- Queue create - NULL address
 static QueueHandle_t gpio_evt_queue = NULL;
@@ -69,9 +82,10 @@ static void IRAM_ATTR gpio_isr_handler(void* arg){
 
 // -- Button task for set points
 void taskSetPoints(void* pvparameters){
-    uint32_t gpio_num;
-    uint8_t led1 = 0, led2 = 0;
 
+    int i = 0;
+
+    uint32_t gpio_num;
     TickType_t last_button_press = 0;
 
     while(1)
@@ -89,10 +103,63 @@ void taskSetPoints(void* pvparameters){
             switch (gpio_num)
             {
                 case BT_LEFT:
-                    gpio_set_level(LED1_PIN, led1^=1);
+                    switch(i) 
+                    {
+                        case 0:
+                            set_point.temp--;
+                            break;
+                        case 1:
+                            set_point.humid--;
+                            break;
+                        case 2:
+                            set_point.lumin--;
+                            break;
+                    
+                    default:
+                        break;
+                    }
                     break;
+
                 case BT_RIGHT:                   
-                    gpio_set_level(LED2_PIN, led2^=1);
+                    switch(i) 
+                    {
+                        case 0:
+                            set_point.temp++;
+                            break;
+                        case 1:
+                            set_point.humid++;
+                            break;
+                        case 2:
+                            set_point.lumin++;
+                            break;
+                    
+                    default:
+                        break;
+                    }
+                    break;
+
+                case BT_DOWN:                   
+                    if ((i >= 0) && (i<2)) {
+                        i++;
+                    }
+                    else {
+                        i = 0;
+                        break;
+                    }
+                    break;
+
+                case BT_UP:
+                    if ((i<=2) && (i > 0)) {
+                        i--;
+                    }
+                    else {
+                        i = 2;
+                        break;
+                    }
+                    break;
+
+                case BT_CONFIRM:                   
+                    decide_sets = true;
                     break;
             }
         }
@@ -114,6 +181,19 @@ void configureButtons(const gpio_num_t *pins, size_t count) {
     gpio_config(&io_config);
 }
 
+void configureLeds(void) {
+    
+    gpio_config_t io_config = {};
+    io_config.pin_bit_mask = (1ULL << LED1_PIN) | (1ULL << LED2_PIN);
+    io_config.mode         = GPIO_MODE_OUTPUT;
+    io_config.pull_up_en   = GPIO_PULLUP_DISABLE;
+    io_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_config.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&io_config);
+
+    gpio_set_level(LED1_PIN, 0);
+    gpio_set_level(LED2_PIN, 0);
+}
 
 // -- Message start display
 void startDisplay(displayPosition_t position, SSD1306_t oled ) {
@@ -129,23 +209,50 @@ void startDisplay(displayPosition_t position, SSD1306_t oled ) {
 
 // -- Set temperature, humidity, luminosity points
 void setPoints(displayPosition_t position, SSD1306_t oled) {
-    setPoint_t set_point = {
-        .temp = 27,
-        .humid = 80,
-        .lumin = 80,
-    };
+
+    decide_sets = false;
 
     ssd1306_clear_screen(&oled, false);
 	ssd1306_contrast(&oled, 0xff);
 	ssd1306_display_text(&oled, position.top, " - SetPoints - ", 16, false);
 
-    // show setpoints
-    sprintf(linechar, "Temp: %d C", set_point.temp);
-    ssd1306_display_text(&oled, position.center_line + 1, linechar, sizeof(linechar),false);
-    sprintf(linechar, "Humi: %d %%", set_point.humid);
-    ssd1306_display_text(&oled, position.center_line + 2, linechar, sizeof(linechar),false);
-    sprintf(linechar, "Lumin: %d cd", set_point.lumin);
-    ssd1306_display_text(&oled, position.center_line + 3, linechar, sizeof(linechar),false);    
+    // -- Queue and Tasks
+    gpio_evt_queue = xQueueCreate(1,sizeof(uint32_t));
+    xTaskCreate(taskSetPoints,"taskSetPoints",2048,NULL, 2, NULL);
+
+    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1);
+    gpio_isr_handler_add(BT_LEFT,gpio_isr_handler,(void*) BT_LEFT);
+    gpio_isr_handler_add(BT_RIGHT,gpio_isr_handler,(void*) BT_RIGHT);
+    gpio_isr_handler_add(BT_UP,gpio_isr_handler,(void*) BT_UP);
+    gpio_isr_handler_add(BT_DOWN,gpio_isr_handler,(void*) BT_DOWN);
+    gpio_isr_handler_add(BT_CONFIRM,gpio_isr_handler,(void*) BT_CONFIRM);
+
+    while(!decide_sets) {
+        // show setpoints
+        sprintf(linechar, "Temp: %d C", set_point.temp);
+        ssd1306_display_text(&oled, position.center_line + 1, linechar, sizeof(linechar),false);
+        sprintf(linechar, "Humi: %d %%", set_point.humid);
+        ssd1306_display_text(&oled, position.center_line + 2, linechar, sizeof(linechar),false);
+        sprintf(linechar, "Lumin: %d cd", set_point.lumin);
+        ssd1306_display_text(&oled, position.center_line + 3, linechar, sizeof(linechar),false);
+    }
+}
+
+void initializateOled(void) {
+
+    // -- Initialize the I2C master driver
+    i2c_master_init(&oled,OLED_SDA_GPIO,OLED_SCL_GPIO,OLED_RESET_GPIO);     
+
+    // -- Initializate OLED
+    ssd1306_init(&oled, 128, 64);
+    ssd1306_clear_screen(&oled, false);
+    
+    // -- Logging OLED
+    ESP_LOGI(tag, "Panel is 128x64");                   
+    ESP_LOGI(tag, "INTERFACE is i2c");
+    ESP_LOGI(tag, "CONFIG_SDA_GPIO=%d",OLED_SDA_GPIO);
+    ESP_LOGI(tag, "CONFIG_SCL_GPIO=%d",OLED_SCL_GPIO);
+    ESP_LOGI(tag, "CONFIG_RESET_GPIO=%d",OLED_RESET_GPIO);
 }
 
 
@@ -168,23 +275,13 @@ void app_main(void)
     #endif 
 
     // -- Configure control buttons
-    const gpio_num_t buttons[] = {BT_RIGHT, BT_LEFT, BT_UP, BT_DOWN, BT_CONFIRM, BT_BACK};
     configureButtons(buttons, sizeof(buttons) / sizeof(buttons[0]));
 
-    // -- Initialize the I2C master driver
-    SSD1306_t oled;
-    i2c_master_init(&oled,OLED_SDA_GPIO,OLED_SCL_GPIO,OLED_RESET_GPIO);     
+    // -- Configure leds pins
+    configureLeds();
 
-    // -- Initializate OLED
-    ssd1306_init(&oled, 128, 64);
-    ssd1306_clear_screen(&oled, false);
-    
-    // -- Logging OLED
-    ESP_LOGI(tag, "Panel is 128x64");                   
-    ESP_LOGI(tag, "INTERFACE is i2c");
-    ESP_LOGI(tag, "CONFIG_SDA_GPIO=%d",OLED_SDA_GPIO);
-    ESP_LOGI(tag, "CONFIG_SCL_GPIO=%d",OLED_SCL_GPIO);
-    ESP_LOGI(tag, "CONFIG_RESET_GPIO=%d",OLED_RESET_GPIO);
+    // -- Initializate I2C and Oled Logging
+    initializateOled();
 
     // -- Start Monitor Estufa
     startDisplay(posit, oled);
@@ -192,34 +289,22 @@ void app_main(void)
     // -- SetPoints
 	setPoints(posit, oled);
 
-    // -- Queue and Tasks
-    gpio_evt_queue = xQueueCreate(1,sizeof(uint32_t));
-    xTaskCreate(taskSetPoints,"taskSetPoints",2048,NULL, 2, NULL);
-
-    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1);
-    gpio_isr_handler_add(BT_LEFT,gpio_isr_handler,(void*) BT_LEFT);
-    gpio_isr_handler_add(BT_RIGHT,gpio_isr_handler,(void*) BT_RIGHT);
-
-    // -- Footer
+    // -- Clear to show in real time monitor sensor
+    ssd1306_clear_screen(&oled, false);
     ssd1306_display_text(&oled, posit.down, "   (Monitor)   ", 16, false);
-
-    int8_t count = 1;
 
     while(true)
     {
         // check if the dht11 sensor is ok
         if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK)
         {
-            sprintf(linechar, "     - %d -     ", count);
-            ssd1306_display_text(&oled, posit.header, linechar, 16, false);
-
             ESP_LOGI(tag, "Temperature %d C", temperature/10);
             ESP_LOGI(tag, "Humidity %d %%", humidity/10);
             
             /*memset(linechar, 0, sizeof(linechar));*/
             sprintf(linechar, "Temp: %d C", temperature/10);
             ssd1306_display_text(&oled, posit.center_line, linechar, sizeof(linechar),false);
-            sprintf(linechar, "Humi: %d %%", humidity/10);
+            sprintf(linechar, "Humid: %d %%", humidity/10);
             ssd1306_display_text(&oled, posit.center_line + 1, linechar, sizeof(linechar),false);
         }
         else
@@ -228,7 +313,6 @@ void app_main(void)
         }
 
         vTaskDelay(pdMS_TO_TICKS(5000));
-        count++;
     }
 }
 
